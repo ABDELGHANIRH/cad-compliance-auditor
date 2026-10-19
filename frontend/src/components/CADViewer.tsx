@@ -186,12 +186,16 @@ function resolvePartId(meshName: string, candidates: CandidateScope): string | n
   if (exact) return exact;
 
   const ordered = [...ids].sort((a, b) => b.length - a.length);
-  const bounded = (needle: string) =>
-    new RegExp(`(^|[^a-z0-9_])${needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([^a-z0-9_]|$)`, 'i').test(name);
 
   for (const id of ordered) {
     const needle = id.toLowerCase();
-    if (needle && bounded(needle)) return id;
+    if (needle && (name.includes(needle) || needle.includes(name))) return id;
+  }
+
+  const cleanName = name.replace(/[^a-z0-9]/g, '');
+  for (const id of ordered) {
+    const cleanId = id.toLowerCase().replace(/[^a-z0-9]/g, '');
+    if (cleanId && (cleanName.includes(cleanId) || cleanId.includes(cleanName))) return id;
   }
 
   if (discipline === null) return null;
@@ -206,10 +210,10 @@ function resolvePartId(meshName: string, candidates: CandidateScope): string | n
 
   for (const id of scoped) {
     const suffix = id.toLowerCase().slice(marker.length);
-    if (bounded(suffix)) return id;
+    if (name.includes(suffix)) return id;
 
     const base = suffix.replace(UNIQUE_SUFFIX, '');
-    if (base !== suffix && base.length >= MIN_PREFIX_LEN && bounded(base)) return id;
+    if (base !== suffix && base.length >= MIN_PREFIX_LEN && name.includes(base)) return id;
   }
 
   if (stripped !== name) {
@@ -439,11 +443,14 @@ function resolveFindingAnchor(
   clash: ClashResult | null,
   placement: FederatedPlacement | null
 ): THREE.Vector3 | null {
-  const meshFor = (partId: string | null | undefined): THREE.Mesh | null => {
-    if (!partId) return null;
-    const discipline = disciplineOfPartId(partId);
+  const partId = check.part_id;
+  if (!partId) return null;
+
+  const meshFor = (id: string | null | undefined): THREE.Mesh | null => {
+    if (!id) return null;
+    const discipline = disciplineOfPartId(id);
     for (const group of groups) {
-      const mesh = findPartMesh(group, partId, discipline);
+      const mesh = findPartMesh(group, id, discipline);
       if (mesh) return mesh;
     }
     return null;
@@ -454,9 +461,6 @@ function resolveFindingAnchor(
     return box.isEmpty() ? null : box.getCenter(new THREE.Vector3());
   };
 
-  const partId = check.part_id;
-  if (!partId) return null;
-
   const text = `${check.check_name} ${check.fix_instruction ?? ''}`;
   const mentions = (id: string) => {
     if (!id) return false;
@@ -465,7 +469,9 @@ function resolveFindingAnchor(
   };
 
   const clashCenter = (id: string): THREE.Vector3 | null => {
-    const component = components.find((c) => c.part_id === id);
+    const component = components.find(
+      (c) => c.part_id.toLowerCase() === id.toLowerCase()
+    );
 
     if (component?.center_mm && placement) {
       const { x, y, z } = component.center_mm;
@@ -478,6 +484,7 @@ function resolveFindingAnchor(
     return mesh ? meshCenter(mesh) : null;
   };
 
+  // 1. Interference midpoint if it's a clash
   const myCenter = clashCenter(partId);
   if (myCenter && clash) {
     const pair = clash.interferences.find((interference) => {
@@ -520,9 +527,23 @@ function resolveFindingAnchor(
     }
   }
 
+  // 2. Direct component center or mesh bounding box for dimensional checks
   if (myCenter) return myCenter;
   const mesh = meshFor(partId);
-  return mesh ? meshCenter(mesh) : null;
+  if (mesh) return meshCenter(mesh);
+
+  // 3. Fallback to component geometry if name was stripped by exporter
+  const comp = components.find((c) => c.part_id.toLowerCase() === partId.toLowerCase());
+  if (comp?.center_mm) {
+    const { x, y, z } = comp.center_mm;
+    const pt = new THREE.Vector3(x, z, -y);
+    if (placement) {
+      pt.multiplyScalar(placement.scale).add(placement.shift.clone().multiplyScalar(-placement.scale));
+    }
+    return pt;
+  }
+
+  return null;
 }
 
 const BEACON_MATERIAL = makeBeaconMaterial();
@@ -604,48 +625,7 @@ interface BeaconFinder {
   partId: string;
   checkIndex: number;
   anchor: THREE.Vector3;
-}
-
-function clusterBeacons(
-  beacons: {
-    id: number;
-    partId: string;
-    checkIndex: number;
-    anchor: THREE.Vector3;
-    severity: FindingSeverity;
-  }[]
-): BeaconFinder[] {
-  const byPosition = new Map<string, { finder: BeaconFinder; severity: FindingSeverity }>();
-
-  for (const beacon of beacons) {
-    const key = `${beacon.anchor.x.toFixed(2)}|${beacon.anchor.y.toFixed(2)}|${beacon.anchor.z.toFixed(2)}`;
-    const existing = byPosition.get(key);
-
-    if (!existing) {
-      byPosition.set(key, {
-        finder: {
-          id: beacon.id,
-          partId: beacon.partId,
-          checkIndex: beacon.checkIndex,
-          anchor: beacon.anchor,
-        },
-        severity: beacon.severity,
-      });
-      continue;
-    }
-
-    // Keep the lowest ID for the cluster
-    if (beacon.id < existing.finder.id) {
-      existing.finder = { ...existing.finder, id: beacon.id, checkIndex: beacon.checkIndex };
-    }
-  }
-
-  return [...byPosition.values()].map((entry) => entry.finder);
-}
-
-function markerColor(severity: FindingSeverity): string {
-  // Enforce strict Red for ALL failures, no orange/blue
-  return VIOLATION_COLOR; 
+  severity: FindingSeverity;
 }
 
 function MarkerNumber({ text, color }: { text: string; color: string }) {
@@ -697,8 +677,6 @@ function MarkerNumber({ text, color }: { text: string; color: string }) {
   );
 }
 
-// --- NEW 3D-NATIVE IN-SCENE HTML CARDS ---
-
 function InSceneFindingCard({
   index,
   headline,
@@ -716,7 +694,6 @@ function InSceneFindingCard({
     <Html position={[0, 0, 0]} center zIndexRange={[100, 0]} style={{ pointerEvents: 'none' }}>
       <div
         className="flex flex-col items-center pointer-events-auto cursor-auto select-text"
-        // Pushes the card perfectly above the 3D pin in screen space
         style={{ transform: 'translate(0, -100%)', marginTop: '-36px' }}
         onPointerDown={(e) => e.stopPropagation()}
         onPointerUp={(e) => e.stopPropagation()}
@@ -740,7 +717,7 @@ function InSceneFindingCard({
               </span>
             </div>
             <button
-              onPointerDown={(e) => {
+              onClick={(e) => {
                 e.stopPropagation();
                 onClose();
               }}
@@ -755,7 +732,6 @@ function InSceneFindingCard({
             </p>
           )}
         </div>
-        {/* Subtle CSS downward tail pointing to the dot */}
         <div className="w-0 h-0 border-l-[6px] border-r-[6px] border-t-[8px] border-transparent relative" style={{ borderTopColor: 'rgba(255,255,255,0.95)' }} />
       </div>
     </Html>
@@ -785,7 +761,6 @@ function InSceneCommentCloud({
     <Html position={[0, 0, 0]} center zIndexRange={[90, 0]} style={{ pointerEvents: 'none' }}>
       <div 
         className="flex flex-col items-center pointer-events-auto cursor-auto select-text"
-        // Pushes the cloud perfectly below the 3D pin in screen space
         style={{ marginTop: '24px' }}
         onPointerDown={(e) => e.stopPropagation()}
         onPointerUp={(e) => e.stopPropagation()}
@@ -794,7 +769,7 @@ function InSceneCommentCloud({
       >
         {!open ? (
           <button
-            onPointerDown={(e) => {
+            onClick={(e) => {
               e.stopPropagation();
               onOpen();
             }}
@@ -806,7 +781,6 @@ function InSceneCommentCloud({
           </button>
         ) : (
           <>
-            {/* Subtle CSS upward tail pointing to the dot */}
             <div className="w-0 h-0 border-l-[6px] border-r-[6px] border-b-[8px] border-transparent relative" style={{ borderBottomColor: 'rgba(255,255,255,0.95)' }} />
             <div
               className="w-64 rounded-xl border bg-white/95 p-3 shadow-xl backdrop-blur relative"
@@ -845,7 +819,6 @@ function InSceneCommentCloud({
                   <button
                     type="submit"
                     disabled={!draft.trim()}
-                    onPointerDown={(e) => e.stopPropagation()} 
                     className="text-blue-600 disabled:opacity-40 p-1 hover:bg-blue-50 rounded transition"
                   >
                     <Send className="h-3 w-3" />
@@ -854,7 +827,7 @@ function InSceneCommentCloud({
               )}
 
               <button
-                onPointerDown={(e) => {
+                onClick={(e) => {
                   e.stopPropagation();
                   onClose();
                 }}
@@ -875,7 +848,6 @@ function AnchorBeacon({
   index,
   active,
   pulse,
-  severity,
   partId,
   checkIndex,
   headline,
@@ -892,7 +864,6 @@ function AnchorBeacon({
   index: number;
   active: boolean;
   pulse: boolean;
-  severity: FindingSeverity;
   partId: string;
   checkIndex: number;
   headline: string;
@@ -906,20 +877,15 @@ function AnchorBeacon({
   onAddAnnotation?: (body: string, threadKey: string) => void;
 }) {
   const radius = useBeaconPulse(pulse);
-  const color = markerColor(severity);
+  const color = VIOLATION_COLOR; // Strict Red
   const isCloudOpen = annotationStack && openAnnotationId 
     ? annotationStack.members.some((m) => m.id === openAnnotationId) 
     : false;
 
   return (
     <group position={anchor}>
-      {/* 
-        The giant AlertRing is now OUTSIDE the interactive hit group. 
-        This prevents it from acting as an invisible shield swallowing nearby clicks. 
-      */}
       {active && <AlertRing anchor={new THREE.Vector3(0, 0, 0)} phase={(index * 0.37) % 1} />}
 
-      {/* 3D Geometry and Interaction Core */}
       <group
         onClick={(e) => {
           e.stopPropagation();
@@ -973,8 +939,6 @@ function AnchorBeacon({
     </group>
   );
 }
-
-// --- RIG AND SCENE SETUP ---
 
 interface CameraPose {
   target: THREE.Vector3;
@@ -1594,6 +1558,7 @@ function FederatedStage({
     return { position: center, radius };
   }, [modelGroups, components, selectedPartId]);
 
+  // Resolves every finding's 3D anchor
   const beacons = useMemo(() => {
     if (modelGroups.length === 0) return [];
 
@@ -1619,35 +1584,25 @@ function FederatedStage({
     onAnchorsResolved?.(findingAnchors);
   }, [findingAnchors, onAnchorsResolved]);
 
-  // CRITICAL FIX: "nothing when everything is good" 
-  // We explicitly filter out ANY markers that are compliant (PASS).
-  const markers = useMemo(() => {
-    const errorBeacons = beacons
+  // FIX: Include all failing checks PLUS the currently selected check (so check 7 displays when clicked!)
+  const visibleBeacons = useMemo(() => {
+    return beacons
       .map((beacon) => ({
         ...beacon,
         id: beacon.checkIndex + 1,
         severity: severityOf(checks[beacon.checkIndex]),
       }))
-      .filter(b => b.severity === 'critical' || b.severity === 'warning');
-
-    return clusterBeacons(errorBeacons);
-  }, [beacons, checks]);
+      .filter((b) => {
+        const isFailing = b.severity === 'critical' || b.severity === 'warning';
+        const isSelected = activeCheckIndex !== null && b.checkIndex === activeCheckIndex;
+        return isFailing || isSelected;
+      });
+  }, [beacons, checks, activeCheckIndex]);
 
   const activeCheckAnchor = useMemo(() => {
     if (activeCheckIndex === null) return null;
     return beacons.find((b) => b.checkIndex === activeCheckIndex)?.anchor ?? null;
   }, [activeCheckIndex, beacons]);
-
-  const visibleMarkers = useMemo(() => {
-    if (markers.length <= BEACON_LEGIBLE_LIMIT) return markers;
-    return markers.filter(
-      (marker) => marker.checkIndex === activeCheckIndex || (selectedPartId !== null && marker.partId === selectedPartId)
-    );
-  }, [markers, activeCheckIndex, selectedPartId]);
-
-  useEffect(() => {
-    onMarkersResolved?.(markers);
-  }, [markers, onMarkersResolved]);
 
   const focusTarget = useMemo<PartSelection | null>(() => {
     if (preset) return null;
@@ -1718,30 +1673,22 @@ function FederatedStage({
         </group>
       )}
 
-      {/* Render Native 3D Anchors, Cards, and Cloud buttons */}
+      {/* Renders all active defect pins + the active selected pin (Check #7) */}
       {showBeacons &&
-        visibleMarkers.map((marker, markerIndex) => {
-          // If the coordinate perfectly matches the active check, we use the active check's ID and text 
-          // (fixes the bug where clustered beacons swallow the popup details of overlapping checks).
-          const isCoordinateActive = activeCheckAnchor !== null && marker.anchor.distanceToSquared(activeCheckAnchor) < 0.001;
-          const isActive = activeCheckIndex === marker.checkIndex || isCoordinateActive;
-          
-          const displayCheckIndex = isActive && activeCheckIndex !== null ? activeCheckIndex : marker.checkIndex;
-          const displayId = isActive && activeCheckIndex !== null ? activeCheckIndex + 1 : marker.id;
-          
-          const check = checks[displayCheckIndex];
-          const stack = pinAt.get(anchorKey([marker.anchor.x, marker.anchor.y, marker.anchor.z]));
+        visibleBeacons.map((beacon, markerIndex) => {
+          const isActive = activeCheckIndex === beacon.checkIndex;
+          const check = checks[beacon.checkIndex];
+          const stack = pinAt.get(anchorKey([beacon.anchor.x, beacon.anchor.y, beacon.anchor.z]));
           
           return (
             <AnchorBeacon
-              key={marker.id}
-              anchor={marker.anchor}
-              index={displayId}
+              key={beacon.id}
+              anchor={beacon.anchor}
+              index={beacon.id}
               active={isActive}
               pulse={markerIndex === 0}
-              severity={severityOf(check)}
               partId={check.part_id}
-              checkIndex={displayCheckIndex}
+              checkIndex={beacon.checkIndex}
               headline={check?.check_name ?? ''}
               problem={check ? findingProblem(check) : ''}
               onOpen={onOpenFinding}
@@ -2059,24 +2006,8 @@ export default function CADViewer({
   const closeAnnotation = onCloseAnnotation ?? (() => {});
 
   const [focusNonce, setFocusNonce] = useState(0);
-  const [markers, setMarkers] = useState<BeaconFinder[]>([]);
-  const handleMarkersResolved = useCallback((next: BeaconFinder[]) => {
-    setMarkers((current) => {
-      if (current.length === next.length) {
-        const same = current.every(
-          (marker, index) =>
-            marker.id === next[index].id &&
-            marker.checkIndex === next[index].checkIndex &&
-            marker.anchor.equals(next[index].anchor)
-        );
-        if (same) return current;
-      }
-      return next;
-    });
-  }, []);
 
   useEffect(() => {
-    setMarkers([]);
     setFocusNonce(0);
   }, [modelUrl, secondaryModelUrl]);
 
@@ -2182,7 +2113,6 @@ export default function CADViewer({
                 showBeacons={isolation === null}
                 inheritedPlacement={sharedPlacement}
                 onPlacementResolved={handlePlacementResolved}
-                onMarkersResolved={handleMarkersResolved}
                 onAnchorsResolved={onAnchorsResolved}
                 ownsPublish
                 focusNonce={focusNonce}
@@ -2236,7 +2166,6 @@ export default function CADViewer({
           onAddAnnotation={onAddAnnotation}
           ownsPublish
           focusNonce={focusNonce}
-          onMarkersResolved={handleMarkersResolved}
           onAnchorsResolved={onAnchorsResolved}
           onPointerMissed={() => onSelectPart(null)}
         />

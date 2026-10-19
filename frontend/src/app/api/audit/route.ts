@@ -1,28 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-/**
- * Server-side proxy for the FastAPI /api/audit endpoint.
- *
- * The browser posts the multipart form here, same-origin; this route forwards it
- * to the backend and streams the response straight back. Two things fall out of
- * that: the browser never issues a cross-origin request (so the audit works
- * whether the page is on localhost:3000 or 127.0.0.1:3000), and uploads stay
- * server-to-server, so large STEP files are not constrained by CORS preflight.
- */
-
 export const runtime = 'nodejs';
-// STEP files can be large; give the geometry import room to finish.
-export const maxDuration = 300;
+export const maxDuration = 300; // Allows up to 5 minutes for heavy geometry conversion
 
 const BACKEND_ORIGIN = process.env.BACKEND_ORIGIN ?? 'http://127.0.0.1:8000';
 
 export async function POST(request: NextRequest) {
-  let form: FormData;
-  try {
-    form = await request.formData();
-  } catch {
+  const contentType = request.headers.get('content-type');
+  if (!contentType || !contentType.includes('multipart/form-data')) {
     return NextResponse.json(
-      { detail: 'Could not read the uploaded form data.' },
+      { detail: 'Expected multipart/form-data payload.' },
       { status: 400 },
     );
   }
@@ -30,7 +17,12 @@ export async function POST(request: NextRequest) {
   try {
     const upstream = await fetch(`${BACKEND_ORIGIN}/api/audit`, {
       method: 'POST',
-      body: form,
+      headers: {
+        'content-type': contentType,
+      },
+      body: request.body,
+      // @ts-expect-error duplex is required by Node.js fetch when streaming request bodies
+      duplex: 'half',
     });
 
     const body = await upstream.text();
@@ -42,13 +34,12 @@ export async function POST(request: NextRequest) {
       },
     });
   } catch (error) {
-    // Almost always means uvicorn is not running.
     return NextResponse.json(
       {
         detail:
           'Could not reach the audit service at ' +
           BACKEND_ORIGIN +
-          '. Start the backend with: uvicorn main:app --reload --port 8000',
+          '. Ensure the backend is running.',
       },
       { status: 502 },
     );
