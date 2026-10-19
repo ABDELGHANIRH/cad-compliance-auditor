@@ -1,0 +1,31 @@
+# Pin to the versions verified working on Python 3.14 / Windows.
+fastapi==0.141.1
+uvicorn[standard]==0.54.0
+python-multipart==0.0.32
+pydantic==2.13.5
+python-dotenv==1.2.3
+
+# IFC/BIM geometry.
+ifcopenshell==0.8.5
+
+# STEP geometry. cascadio is trimesh's STEP backend - it is a packaged build of
+# OpenCASCADE and ships an abi3 wheel that installs on 3.14. Without it,
+# trimesh.load(..., file_type="step") raises ModuleNotFoundError.
+# Do NOT replace this with cadquery/OCP: those have no Python 3.14 wheel, which
+# is what originally broke STEP uploads.
+cascadio==0.1.1
+trimesh==5.1.0
+numpy==2.5.3
+
+# Required by trimesh for mesh processing (repair, smoothing, boolean paths).
+scipy==1.18.1
+
+# Not used for STEP reading. The pip gmsh wheel cannot import STEP - Gmsh only
+# does so through its own bundled OpenCASCADE, which the wheel does not expose.
+gmsh==4.15.2
+
+openai==3.19.2
+
+# Test suite (backend/tests). Drives the two committed fixtures through both
+# geometry processors and asserts exact dimensions, volumes and clash results.
+pytest==9.1.1

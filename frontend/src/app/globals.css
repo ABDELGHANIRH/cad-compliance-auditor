@@ -1,0 +1,609 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+/* Light by default: the intake screen and the workbench chrome are a design
+   review surface, and the printed report shares the same palette. The one dark
+   surface left is the 3D canvas backdrop, which is painted by CADViewer. */
+body {
+  @apply bg-slate-50 text-slate-900 antialiased;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Inter', sans-serif;
+}
+
+/* ---------------------------------------------------------------------------
+   Numeric values
+   ---------------------------------------------------------------------------
+   Dimensions, tolerances and penetrations are read as columns of figures, so
+   they need digits of equal width or the decimal points wander between rows and
+   the numbers stop being comparable at a glance. Applied as a utility class
+   rather than per-element font-family so the face stays the UI sans-serif -
+   the point is alignment, not a monospace look. */
+.tnum {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum' 1;
+}
+
+/* Slim scrollbar for the checklist panel, which can grow long. */
+.thin-scroll::-webkit-scrollbar {
+  width: 8px;
+}
+.thin-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+.thin-scroll::-webkit-scrollbar-thumb {
+  @apply rounded-full bg-slate-300;
+}
+.thin-scroll::-webkit-scrollbar-thumb:hover {
+  @apply bg-slate-400;
+}
+
+/* ---------------------------------------------------------------------------
+   Printable audit report
+   ---------------------------------------------------------------------------
+   The report is rendered into the DOM at all times but hidden on screen, and
+   revealed only for printing. Two consequences drive the rules below:
+
+   1. The app is dark (`color-scheme: dark` above), so the report carries its
+      own light palette. Printing the slate theme gives a black page.
+   2. Everything else must be hidden when printing, or the app chrome, the 3D
+      canvas and the checklist would all appear alongside the report.
+   --------------------------------------------------------------------------- */
+
+#audit-report {
+  display: none;
+}
+
+@media print {
+  /* Force a light document regardless of the OS/browser dark preference. */
+  :root {
+    color-scheme: light;
+  }
+
+  html,
+  body {
+    background: #ffffff !important;
+    color: #111827 !important;
+    height: auto;
+  }
+
+  /* Hide the application; show only the report. */
+  #app-root {
+    display: none !important;
+  }
+
+  #audit-report {
+    display: block !important;
+  }
+
+  @page {
+    margin: 16mm 14mm;
+  }
+}
+
+/* Report typography - plain CSS, no Tailwind utilities, so the printed output
+   does not depend on utility classes surviving the print media query. */
+.report-doc {
+  color: #111827;
+  font-size: 10.5pt;
+  line-height: 1.45;
+}
+
+.report-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12pt;
+  border-bottom: 2pt solid #111827;
+  padding-bottom: 8pt;
+  margin-bottom: 14pt;
+}
+
+.report-header h1 {
+  font-size: 17pt;
+  font-weight: 700;
+  margin: 0;
+}
+
+.report-sub {
+  margin: 2pt 0 0;
+  color: #4b5563;
+  font-size: 9.5pt;
+}
+
+.report-verdict {
+  border: 1.5pt solid currentColor;
+  border-radius: 3pt;
+  padding: 4pt 10pt;
+  font-size: 13pt;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+}
+
+.report-verdict.is-pass {
+  color: #047857;
+}
+
+.report-verdict.is-fail {
+  color: #b91c1c;
+}
+
+.report-doc section {
+  margin-bottom: 14pt;
+}
+
+.report-doc h2 {
+  font-size: 11pt;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #374151;
+  border-bottom: 0.5pt solid #d1d5db;
+  padding-bottom: 3pt;
+  margin: 0 0 7pt;
+}
+
+.report-meta {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 3pt 18pt;
+  margin: 0 0 8pt;
+}
+
+.report-meta dt {
+  font-size: 8.5pt;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #6b7280;
+}
+
+.report-meta dd {
+  margin: 0 0 4pt;
+  font-weight: 600;
+}
+
+.report-summary {
+  margin: 6pt 0 0;
+}
+
+/* Executive summary stat row - the four numbers a reader wants first. */
+.report-stat-row {
+  display: flex;
+  gap: 8pt;
+  margin: 9pt 0 10pt;
+}
+
+.report-stat {
+  flex: 1 1 0;
+  border: 0.5pt solid #e5e7eb;
+  border-radius: 4pt;
+  padding: 6pt 7pt;
+  background: #f9fafb;
+}
+
+.report-stat.is-fail {
+  border-color: #fecaca;
+  background: #fef2f2;
+}
+
+.report-stat.is-pass {
+  border-color: #a7f3d0;
+  background: #f0fdf4;
+}
+
+.report-stat-value {
+  display: block;
+  font-size: 16pt;
+  font-weight: 700;
+  line-height: 1.1;
+}
+
+.report-stat.is-fail .report-stat-value {
+  color: #b91c1c;
+}
+
+.report-stat.is-pass .report-stat-value {
+  color: #047857;
+}
+
+.report-stat-label {
+  display: block;
+  margin-top: 1pt;
+  font-size: 8pt;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #6b7280;
+}
+
+/* ---------------------------------------------------------------------------
+   Finding cards
+   ---------------------------------------------------------------------------
+   The printed equivalent of the on-screen review card: author header, tags,
+   the target/actual comparison, the plain-English review and the thread. */
+
+.report-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 8pt;
+  margin-top: 6pt;
+}
+
+.report-card {
+  border: 0.5pt solid #d1d5db;
+  border-left-width: 2.5pt;
+  border-radius: 4pt;
+  padding: 8pt 9pt;
+  break-inside: avoid;
+  page-break-inside: avoid;
+}
+
+.report-card.is-fail {
+  border-left-color: #b91c1c;
+}
+
+.report-card.is-pass {
+  border-left-color: #047857;
+}
+
+.report-card-head {
+  display: flex;
+  align-items: center;
+  gap: 6pt;
+  margin-bottom: 6pt;
+}
+
+.report-avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20pt;
+  height: 20pt;
+  border-radius: 50%;
+  font-size: 7.5pt;
+  font-weight: 700;
+  color: #ffffff;
+  flex-shrink: 0;
+}
+
+.report-avatar.is-ai {
+  background: #0284c7;
+}
+
+.report-avatar.is-reviewer {
+  background: #0d9488;
+}
+
+.report-card-who {
+  display: flex;
+  align-items: center;
+  gap: 5pt;
+  min-width: 0;
+}
+
+.report-card-name {
+  font-weight: 700;
+}
+
+.report-chip {
+  border: 0.5pt solid #d1d5db;
+  border-radius: 3pt;
+  padding: 0.5pt 3.5pt;
+  font-size: 7.5pt;
+  color: #4b5563;
+  background: #f3f4f6;
+}
+
+.report-status {
+  margin-left: auto;
+  font-size: 8.5pt;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.report-card-title {
+  font-size: 11pt;
+  font-weight: 700;
+  margin: 0 0 5pt;
+}
+
+.report-card-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4pt;
+  margin-bottom: 6pt;
+}
+
+.report-tag {
+  border-radius: 999pt;
+  padding: 1pt 5pt;
+  font-size: 7.5pt;
+  font-weight: 600;
+  border: 0.5pt solid #d1d5db;
+  color: #374151;
+  background: #f9fafb;
+}
+
+.report-tag.is-dimensional {
+  border-color: #bae6fd;
+  background: #f0f9ff;
+  color: #0369a1;
+}
+
+.report-tag.is-clearance {
+  border-color: #fde68a;
+  background: #fffbeb;
+  color: #92400e;
+}
+
+.report-tag.is-safety {
+  border-color: #fecaca;
+  background: #fef2f2;
+  color: #b91c1c;
+}
+
+.report-tag.is-material {
+  border-color: #ddd6fe;
+  background: #f5f3ff;
+  color: #6d28d9;
+}
+
+.report-tag.is-part {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.report-tag.is-decision {
+  border-color: #a5b4fc;
+  background: #eef2ff;
+  color: #3730a3;
+}
+
+/* Target vs actual, side by side. */
+.report-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5pt;
+  margin-bottom: 6pt;
+}
+
+.report-metric {
+  display: flex;
+  align-items: baseline;
+  gap: 4pt;
+  border: 0.5pt solid #e5e7eb;
+  border-radius: 3pt;
+  padding: 2.5pt 5pt;
+  background: #f9fafb;
+}
+
+.report-metric.is-fail {
+  border-color: #fecaca;
+  background: #fef2f2;
+}
+
+.report-metric.is-pass {
+  border-color: #a7f3d0;
+  background: #f0fdf4;
+}
+
+.report-metric-label {
+  font-size: 7.5pt;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #6b7280;
+}
+
+.report-metric-value {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 9pt;
+  font-weight: 600;
+}
+
+.report-metric.is-fail .report-metric-value {
+  color: #b91c1c;
+}
+
+.report-metric.is-pass .report-metric-value {
+  color: #047857;
+}
+
+/* The three plain-English bullets. */
+.report-review {
+  margin: 0 0 6pt;
+  border: 0.5pt solid #e5e7eb;
+  border-radius: 3pt;
+  background: #f9fafb;
+  padding: 6pt 7pt;
+}
+
+.report-review-row {
+  display: flex;
+  gap: 7pt;
+}
+
+.report-review-row + .report-review-row {
+  margin-top: 3.5pt;
+}
+
+.report-review-row dt {
+  flex: 0 0 72pt;
+  font-size: 7.5pt;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #6b7280;
+  padding-top: 1pt;
+}
+
+.report-review-row dt.is-action {
+  color: #b45309;
+}
+
+.report-review-row dd {
+  margin: 0;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* Reviewer thread. */
+.report-thread {
+  border-top: 0.5pt solid #e5e7eb;
+  padding-top: 6pt;
+  margin-bottom: 5pt;
+}
+
+.report-thread-title {
+  margin: 0 0 4pt;
+  font-size: 7.5pt;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #6b7280;
+}
+
+.report-comment {
+  display: flex;
+  gap: 6pt;
+}
+
+.report-comment + .report-comment {
+  margin-top: 5pt;
+}
+
+.report-comment-body {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.report-comment-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4pt;
+  margin: 0;
+  font-size: 8.5pt;
+}
+
+.report-comment-time {
+  color: #9ca3af;
+  font-size: 7.5pt;
+}
+
+.report-comment-text {
+  margin: 1.5pt 0 0;
+  font-size: 9.5pt;
+}
+
+.report-card-signoff {
+  margin: 0;
+  padding-top: 5pt;
+  border-top: 0.5pt solid #e5e7eb;
+  font-size: 8.5pt;
+  color: #4b5563;
+}
+
+.report-note {
+  color: #4b5563;
+  margin: 4pt 0 0;
+  font-size: 9.5pt;
+}
+
+.report-spec {
+  white-space: pre-wrap;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 9pt;
+  background: #f9fafb;
+  border: 0.5pt solid #e5e7eb;
+  border-radius: 3pt;
+  padding: 7pt;
+  margin: 0;
+}
+
+.report-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 6pt;
+  /* Repeat the header when a long findings table spans pages. */
+}
+
+.report-table thead {
+  display: table-header-group;
+}
+
+.report-table th {
+  text-align: left;
+  font-size: 8.5pt;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #4b5563;
+  border-bottom: 1pt solid #9ca3af;
+  padding: 3pt 4pt;
+  vertical-align: bottom;
+}
+
+.report-table td {
+  border-bottom: 0.5pt solid #e5e7eb;
+  padding: 4pt;
+  vertical-align: top;
+  font-size: 9.5pt;
+}
+
+/* Keep a row intact across a page break - a finding split in half is unreadable. */
+.report-table tr {
+  break-inside: avoid;
+  page-break-inside: avoid;
+}
+
+.report-cell-note {
+  margin: 2pt 0 0;
+  color: #4b5563;
+  font-size: 8.5pt;
+}
+
+.report-cell-fix {
+  margin: 2pt 0 0;
+  color: #92400e;
+  font-size: 8.5pt;
+}
+
+.is-fail-text {
+  color: #b91c1c;
+  font-weight: 700;
+}
+
+.is-pass-text {
+  color: #047857;
+  font-weight: 700;
+}
+
+.report-unreviewed {
+  color: #9ca3af;
+}
+
+.report-caveat {
+  margin: 6pt 0 0;
+  padding: 5pt 7pt;
+  background: #fffbeb;
+  border-left: 2.5pt solid #f59e0b;
+  font-size: 9pt;
+  color: #78350f;
+}
+
+.report-footer {
+  margin-top: 16pt;
+  padding-top: 7pt;
+  border-top: 0.5pt solid #d1d5db;
+  color: #6b7280;
+  font-size: 8.5pt;
+}
+
+.report-footer p {
+  margin: 0;
+}
